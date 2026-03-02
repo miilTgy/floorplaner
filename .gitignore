@@ -1,0 +1,40 @@
+# Build artifacts
+/build/
+/bin/
+/output/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Generated binaries / symlinks
+floorplan
+parser
+
+# Logs and temp files
+*.log
+*.tmp
+*~
+*.swp
+*.swo
+
+# IDE/editor settings
+.vscode/
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Tooling
+compile_commands.json
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Input files
+samples/
