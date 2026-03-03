@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "orderer.h"
 
 namespace {
 
@@ -48,20 +49,33 @@ int main(int argc, char **argv) {
   }
 
   const bool debug = debug_enabled(argc, argv);
+  (void)time_limit;
 
   try {
     Problem P = parse_problem(input_path);
 
     if (debug) {
       dump_problem(P, std::cout);
+      setenv("DEBUG", "1", 1);
     }
 
     std::cout << "Parsed OK: W=" << P.chipW << ", blocks=" << P.blocks.size()
-              << ", pins=" << P.pins.size() << ", nets=" << P.nets.size() << "\n";
+    << ", pins=" << P.pins.size() << ", nets=" << P.nets.size()
+    << "\n";
+    
+    std::vector<int> perm = build_initial_ordering(P);
 
-    // TODO: State init = build_initial_ordering(P);
-    // TODO: Placement pl = decode_BL(P, init);
-    // TODO: State best = run_SA(P, init, time_limit);
+    if (debug) {
+      dump_ordering_trace();
+      std::cout << "Ordering (by block name):";
+      for (int id : perm) {
+        std::cout << " " << P.blocks[static_cast<size_t>(id)].name;
+      }
+      std::cout << "\n";
+    }
+
+    // TODO: Placement pl = decode_BL(P, perm, ...);
+    // TODO: State best = run_SA(P, init_state, time_limit);
     // TODO: write_solution(...)
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";
