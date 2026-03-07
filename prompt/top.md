@@ -198,3 +198,117 @@
 - 打印 summary
 - 在 debug 下打印 problem / ordering / planer 的 debug 信息
 - 为后续 SA 和写最终 solution 文件预留 TODO 注释
+
+---
+
+# 在保持以上所有内容不变的前提下，继续新增以下补充要求（加入 writer 模块）
+
+现在工程里已经新增第四个**无副作用**模块：
+
+4) Writer 模块  
+- API：`void write_solution(const Problem& P, const FloorplanResult& fp, const std::string& output_path);`
+- 可选：
+  - `void write_solution_stream(const Problem& P, const FloorplanResult& fp, std::ostream& os);`
+  - `std::string solution_to_string(const Problem& P, const FloorplanResult& fp);`
+- 该模块负责：
+  - 按作业要求的输出格式，把当前 floorplan 写成 solution 文件
+  - 输出格式为每个 block 一行：
+    - `<blockName> : <x> <y> <rotate>`
+
+⚠️ 请注意：
+- 以上原始提示词内容仍然不要删除或改写
+- 现在 main 必须把 writer 串接进去
+- 当前阶段虽然仍然不实现 SA，但**必须真正写出一个 solution 文件**
+- 输出的 solution 文件路径需要在 main 中自动推导，不要求用户额外传第三个参数
+
+---
+
+## 对 `src/main.cc` 的新增要求（在原有要求基础上继续追加）
+
+### 主流程（再次更新后）
+1. `Problem P = parse_problem(input_path);`
+2. `std::vector<int> perm = build_initial_ordering(P);`
+3. `FloorplanResult fp = build_initial_floorplan(P, perm);`
+4. 根据输入文件路径 `input_path` 自动构造输出路径 `output_path`
+5. 调用：
+   - `write_solution(P, fp, output_path);`
+6. 若 debug 开启：
+   - 如果项目里有 `dump_problem`：调用 `dump_problem(P, std::cout);`
+   - 打印 ordering（按 block 名）：
+     - `Ordering (by block name): ...`
+   - 如果项目里有 `dump_ordering_debug`：调用它（可选）
+   - 如果项目里有 `dump_init_planer_debug`：调用它（可选）
+   - 额外打印初始 floorplan 的简短信息，例如：
+     - `Initial floorplan: H=..., hpwl=..., cost=...`
+   - 额外打印 writer 的输出路径：
+     - `Solution written to: ...`
+7. 无论是否 debug，都打印一行简短 summary（便于脚本检查）：
+   - `Parsed OK: W=..., blocks=..., pins=..., nets=..., ordering_len=..., H=..., hpwl=..., cost=..., solution=...`
+
+### output_path 的构造规则（必须实现）
+根据作业要求，输出文件应与输入样例同名并追加 `_solution.txt`。
+
+要求：
+- 从 `input_path` 中取出“去掉扩展名的文件名”
+- 若输入是：
+  - `samples/sample_1.txt`
+- 则输出文件应为：
+  - `sample_1_solution.txt`
+- 默认写到**当前工作目录**
+- 不要写回 `samples/` 目录，避免污染样例目录
+
+也就是说：
+- 输入路径只用于提取 basename
+- 输出文件固定落在运行目录
+
+### 重要限制（再次补充）
+- main 仍然不得生成其他额外文件
+- 但 main 现在必须真实调用 writer，写出 solution 文件
+- main 不需要自己拼接输出内容，必须通过 writer 模块写文件
+
+### 为后续预留接口（更新后）
+请把 TODO 注释进一步更新成与 writer 一致的风格，只留注释：
+- `// TODO: Improve fp with local search / SA within timeLimit`
+- `// TODO: Rewrite solution file after improvement`
+- `// TODO: write_solution(P, improved_fp, output_path);`
+
+---
+
+## 对 `Makefile` 的新增要求（在原有要求基础上继续追加）
+
+- `make` / `make all` / `make floorplan` 必须把 parser + orderer + planer + writer + main 一起编译链接成最终 `floorplan`
+- `make run INPUT=samples/sample_1.txt T=1` 仍然运行：
+  - `./floorplan $(INPUT) $(T) --debug`
+- 不需要新增其他 target 名称
+- 不要把 writer 做成独立可执行文件
+- 仍然不要生成任何额外测试可执行文件（比如 parser.out / orderer.out / planer.out / writer.out）
+
+---
+
+## 你实现 main 时必须满足的兼容性要求（继续追加）
+
+- 如果 `dump_problem` 存在，就调用
+- 如果 `dump_ordering_debug` 存在，就调用
+- 如果 `dump_init_planer_debug` 存在，就调用
+- `write_solution` 作为 writer 的核心 API，必须调用
+- 如果某些可选 dump 函数在头文件中没有声明，不要强行调用导致编译错误；请以当前工程里真实存在的声明为准
+- 也就是说：main 的 include 和调用要与当前工程的真实头文件保持一致，不能假设不存在的符号；但 writer 的主写文件接口是必须存在的
+
+---
+
+## 你现在最终要做的事情（最终更新）
+在**不改变上面所有原始与追加文字内容**的前提下，实现一个更新后的：
+
+- `src/main.cc`
+- `Makefile`
+
+使其能够：
+- 读取输入
+- 调 parser
+- 调 orderer
+- 调 planer
+- 调 writer
+- 自动生成 `<sampleName>_solution.txt`
+- 打印 summary
+- 在 debug 下打印 problem / ordering / planer 的 debug 信息
+- 为后续 SA 和改写最终 solution 文件预留 TODO 注释

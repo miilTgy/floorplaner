@@ -13,6 +13,7 @@ struct CandidatePoint {
   double y;
   int rotate;
   bool is_pin_align;
+  bool is_mixed_corner;
   int base_corner_index;
   CornerType base_corner_type;
   int src_pin_id;
@@ -26,6 +27,7 @@ struct LegalCandidateDebug {
   double y;
   int rotate;
   bool is_pin_align;
+  bool is_mixed_corner;
   int base_corner_index;
   CornerType base_corner_type;
   int src_pin_id;
@@ -44,6 +46,7 @@ struct RotationDebug {
   double h;
   std::vector<CandidatePoint> block_corner_candidates;
   std::vector<CandidatePoint> pin_align_candidates;
+  std::vector<CandidatePoint> mixed_corner_candidates;
 };
 
 struct IterDebug {
@@ -302,6 +305,21 @@ void cleanup_corners_inside_blocks(std::vector<BlockCorner> &corners,
   corners.swap(kept);
 }
 
+long long quantize(double v) { return std::llround(v * 1e9); }
+
+std::string candidate_key(double x, double y, int rotate) {
+  return std::to_string(quantize(x)) + "#" + std::to_string(quantize(y)) + "#" +
+         std::to_string(rotate);
+}
+
+void append_unique_axis_value(std::vector<double> &vals,
+                              std::unordered_set<long long> &seen, double v) {
+  const long long q = quantize(v);
+  if (seen.insert(q).second) {
+    vals.push_back(v);
+  }
+}
+
 bool better_first_block(double H_cand, double x_cand, double y_cand, int r_cand,
                         double H_best, double x_best, double y_best, int r_best) {
   if (H_cand != H_best) {
@@ -387,11 +405,16 @@ void dump_init_planer_debug(std::ostream &os) {
            << " src_pin=" << c.src_pin_name << "(" << c.src_pin_id << ")"
            << " ref_pin=" << c.ref_pin_name << "(" << c.ref_pin_id << ")" << "\n";
       }
+
+      for (const CandidatePoint &c : rot.mixed_corner_candidates) {
+        os << "[PLANER]   mixed-corner cand x=" << c.x << " y=" << c.y << "\n";
+      }
     }
 
     for (const LegalCandidateDebug &c : iter.legal_candidates) {
       os << "[PLANER] legal x=" << c.x << " y=" << c.y << " rotate=" << c.rotate
          << " is_pin_align=" << (c.is_pin_align ? "YES" : "NO")
+         << " is_mixed_corner=" << (c.is_mixed_corner ? "YES" : "NO")
          << " src_pin="
          << (c.src_pin_name.empty() ? "-" : c.src_pin_name) << "(" << c.src_pin_id << ")"
          << " ref_pin="
@@ -507,6 +530,7 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
         chosen.y = best_y;
         chosen.rotate = best_rotate;
         chosen.is_pin_align = false;
+        chosen.is_mixed_corner = false;
         chosen.base_corner_index = -1;
         chosen.base_corner_type = CornerType::RIGHT_DOWN;
         chosen.src_pin_id = -1;
@@ -556,7 +580,27 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
       }
 
       std::vector<CandidatePoint> candidates;
-      candidates.reserve(corners.size() * 4 + 4);
+      candidates.reserve(corners.size() * corners.size() + corners.size() * 4 + 16);
+      std::unordered_set<std::string> candidate_seen;
+
+      if (w > static_cast<double>(P.chipW) + kEps) {
+        if (debug) {
+          iter_debug.rotations.push_back(rot_debug);
+        }
+        continue;
+      }
+
+      const auto push_candidate = [&](const CandidatePoint &cand,
+                                      std::vector<CandidatePoint> *debug_bucket) {
+        const std::string key = candidate_key(cand.x, cand.y, cand.rotate);
+        if (!candidate_seen.insert(key).second) {
+          return;
+        }
+        candidates.push_back(cand);
+        if (debug && debug_bucket != nullptr) {
+          debug_bucket->push_back(cand);
+        }
+      };
 
       for (int ci = 0; ci < static_cast<int>(corners.size()); ++ci) {
         const BlockCorner &corner = corners[static_cast<size_t>(ci)];
@@ -566,16 +610,14 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
         base.y = corner.y;
         base.rotate = r;
         base.is_pin_align = false;
+        base.is_mixed_corner = false;
         base.base_corner_index = ci;
         base.base_corner_type = corner.type;
         base.src_pin_id = -1;
         base.ref_pin_id = -1;
         base.src_pin_name.clear();
         base.ref_pin_name.clear();
-        candidates.push_back(base);
-        if (debug) {
-          rot_debug.block_corner_candidates.push_back(base);
-        }
+        push_candidate(base, debug ? &rot_debug.block_corner_candidates : nullptr);
 
         for (int src_pid : block.pin_ids) {
           const Pin &src_pin = P.pins[static_cast<size_t>(src_pid)];
@@ -607,6 +649,7 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
               CandidatePoint aligned;
               aligned.rotate = r;
               aligned.is_pin_align = true;
+              aligned.is_mixed_corner = false;
               aligned.base_corner_index = ci;
               aligned.base_corner_type = corner.type;
               aligned.src_pin_id = src_pid;
@@ -622,12 +665,42 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
                 aligned.y = ref_y - h * 0.5 - dy_rot;
               }
 
-              candidates.push_back(aligned);
-              if (debug) {
-                rot_debug.pin_align_candidates.push_back(aligned);
-              }
+              push_candidate(aligned, debug ? &rot_debug.pin_align_candidates : nullptr);
             }
           }
+        }
+      }
+
+      std::vector<double> x_rd;
+      std::vector<double> y_lu;
+      x_rd.reserve(corners.size());
+      y_lu.reserve(corners.size());
+      std::unordered_set<long long> x_seen;
+      std::unordered_set<long long> y_seen;
+
+      for (const BlockCorner &corner : corners) {
+        if (corner.type == CornerType::RIGHT_DOWN) {
+          append_unique_axis_value(x_rd, x_seen, corner.x);
+        } else {
+          append_unique_axis_value(y_lu, y_seen, corner.y);
+        }
+      }
+
+      for (double xr : x_rd) {
+        for (double yl : y_lu) {
+          CandidatePoint mixed;
+          mixed.x = xr;
+          mixed.y = yl;
+          mixed.rotate = r;
+          mixed.is_pin_align = false;
+          mixed.is_mixed_corner = true;
+          mixed.base_corner_index = -1;
+          mixed.base_corner_type = CornerType::RIGHT_DOWN;
+          mixed.src_pin_id = -1;
+          mixed.ref_pin_id = -1;
+          mixed.src_pin_name.clear();
+          mixed.ref_pin_name.clear();
+          push_candidate(mixed, debug ? &rot_debug.mixed_corner_candidates : nullptr);
         }
       }
 
@@ -641,12 +714,12 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
         const double delta_h = H_after - current_H;
         const double delta_hpwl =
             compute_delta_hpwl(P, block_id, placed, result.x, result.y, result.rotate, cand.x,
-                               cand.y, r);
+                               cand.y, cand.rotate);
         const double avg_delta_hpwl =
             P.nets.empty() ? 0.0 : (delta_hpwl / static_cast<double>(P.nets.size()));
         const double score = 2.0 * (1.0 - kAlpha) * delta_h + 2.0 * kAlpha * avg_delta_hpwl;
 
-        if (!has_best || better_candidate(score, delta_h, delta_hpwl, cand.x, cand.y, r,
+        if (!has_best || better_candidate(score, delta_h, delta_hpwl, cand.x, cand.y, cand.rotate,
                                           best_score, best_delta_h, best_delta_hpwl, best_cand.x,
                                           best_cand.y, best_cand.rotate)) {
           has_best = true;
@@ -664,6 +737,7 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
           d.y = cand.y;
           d.rotate = cand.rotate;
           d.is_pin_align = cand.is_pin_align;
+          d.is_mixed_corner = cand.is_mixed_corner;
           d.base_corner_index = cand.base_corner_index;
           d.base_corner_type = cand.base_corner_type;
           d.src_pin_id = cand.src_pin_id;
@@ -704,7 +778,9 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
 
     current_H = std::max(current_H, chosen_y + best_h);
 
-    remove_corner_at(corners, best_cand.base_corner_index);
+    if (!best_cand.is_mixed_corner) {
+      remove_corner_at(corners, best_cand.base_corner_index);
+    }
 
     corners.push_back(
         BlockCorner{chosen_x + best_w, chosen_y, CornerType::RIGHT_DOWN, block_id});
@@ -717,6 +793,7 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
       for (LegalCandidateDebug &d : legal_debug_entries) {
         if (std::abs(d.x - best_cand.x) <= kEps && std::abs(d.y - best_cand.y) <= kEps &&
             d.rotate == best_cand.rotate && d.is_pin_align == best_cand.is_pin_align &&
+            d.is_mixed_corner == best_cand.is_mixed_corner &&
             d.base_corner_index == best_cand.base_corner_index) {
           d.chosen = true;
           break;

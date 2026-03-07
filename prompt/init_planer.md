@@ -104,9 +104,10 @@ orderer 提供：
 对于 `perm[t]` (`t > 0`)：
 - 对每个旋转 `r in {0,1}`：
   - 根据当前块尺寸和 pins 生成候选点
-  - 候选点由两类组成：
+  - 候选点由三类组成：
     1. **block corner 候选点**
     2. **pin align 候选点**
+    3. **mixed corner 候选点**
 - 对所有候选 `(x, y, rotate)`：
   - 检查合法性（有没有与现有块重叠，有没有越过右边界）
   - 计算局部 cost 评分
@@ -173,6 +174,7 @@ orderer 提供：
 每个候选点要记录来源：
 - 它来自哪个 corner
 - 它是不是 pin-align 点
+- 它是不是 mixed-corner 点
 - 如果是 pin-align 点，它对应哪个基准 corner
 
 建议定义：
@@ -182,6 +184,7 @@ orderer 提供：
   - `double y;`
   - `int rotate;`
   - `bool is_pin_align;`
+  - `bool is_mixed_corner;`
   - `int base_corner_index;`
   - `CornerType base_corner_type;`
   - `};`
@@ -218,6 +221,49 @@ pin-align 点从每个 block corner 出发，**只在一个方向上搜索**：
 原因：
 - 避免把块无节制地抬高或推得过右
 - 这部分自由度留给后续局部搜索/改进器处理
+
+---
+
+## 5.3 mixed corner 候选点（新增，必须实现）
+除了单个 block 的基础 corner 外，还必须生成 **mixed corner 候选点**，用于覆盖“贴着某块右侧并同时贴着另一块上侧”的填缝位置。
+
+### mixed corner 的定义
+收集当前所有动态 block corner 中：
+
+- 所有 `RIGHT_DOWN` corner 的 `x` 值，记为 `X_rd`
+- 所有 `LEFT_UP` corner 的 `y` 值，记为 `Y_lu`
+
+对所有组合：
+
+\[
+(x_{rd}, y_{lu}), \quad x_{rd} \in X_{rd},\; y_{lu} \in Y_{lu}
+\]
+
+生成一个 mixed corner 候选点：
+- `(x_rd, y_lu)`
+
+语义：
+- 新块左下角同时贴在“某个已放块的右边界”与“另一个已放块的上边界”形成的交叉槽位上
+
+### 为什么要加这类候选点
+仅靠单块的 `RIGHT_DOWN=(x+w,y)` 与 `LEFT_UP=(x,y+h)` 无法表达如下位置：
+
+- `x = 某个块的右边界`
+- `y = 另一个块的上边界`
+
+这类位置在 floorplanning 中非常常见，尤其是：
+- “贴着 B 的右侧，同时贴着 D 的上侧”
+- 或者“塞进两个已放块形成的矩形槽位”
+
+如果不加入 mixed corner 候选，许多明显合理的放置位置根本不会被生成。
+
+### 实现要求
+- mixed corner 候选点与普通候选点一样，最终都要经过合法性检查
+- mixed corner 候选点不需要对应单一 base corner
+- `CandidatePoint` 中应标记：
+  - `is_mixed_corner = true`
+  - `is_pin_align = false`
+- mixed corner 候选点也要做去重（和其他候选点统一去重即可）
 
 ---
 
@@ -341,7 +387,7 @@ score = 2 \times (1 - \alpha) \cdot \Delta H + 2 \times \alpha \cdot \Delta \lef
 其中：
 - `ΔH = H_after - H_before`
 - `Δ(HPWL/numNets)` = 当前候选相对于当前 floorplan 的平均 HPWL 增量
-- 初始建议 `alpha = 0.5`
+- 初始建议 `alpha = 0.9`
 - 将 alpha 写成模块内常量，后续可调
 
 ## 8.1 ΔH 的计算
@@ -395,7 +441,8 @@ score = 2 \times (1 - \alpha) \cdot \Delta H + 2 \times \alpha \cdot \Delta \lef
 3. 更新 `current_H`
 4. 更新当前已放标记
 5. 更新 corner 点集：
-   - 删除本次使用的基准 corner
+   - 如果本次候选来自普通 block corner 或 pin-align，则删除本次使用的基准 corner
+   - 如果本次候选来自 mixed corner，则不要求删除特定单一基准 corner
    - 加入当前块产生的两个新 corner：
      - `(x + w, y)` as RIGHT_DOWN
      - `(x, y + h)` as LEFT_UP
@@ -409,13 +456,14 @@ score = 2 \times (1 - \alpha) \cdot \Delta H + 2 \times \alpha \cdot \Delta \lef
 1. 对 `rotate = 0/1` 分别处理
 2. 生成 block-corner 候选点
 3. 基于每个 corner 按规则生成 pin-align 候选点
-4. 合并候选点集合
-5. 对每个候选点：
+4. 生成 mixed corner 候选点
+5. 合并候选点集合
+6. 对每个候选点：
    - 检查合法性
    - 计算局部 score
-6. 选最优候选放下
-7. 更新 corner 点集与 floorplan 状态
-8. 继续下一个 block
+7. 选最优候选放下
+8. 更新 corner 点集与 floorplan 状态
+9. 继续下一个 block
 
 若某块在某旋转下没有任何合法候选，则该旋转无效。  
 若两个旋转都无合法候选，这理论上不应发生；若发生，请抛出 `std::runtime_error`，并附带 block_id / block_name 信息。
@@ -440,7 +488,8 @@ score = 2 \times (1 - \alpha) \cdot \Delta H + 2 \times \alpha \cdot \Delta \lef
 2. 当前 block、当前旋转
 3. 所有 block-corner 候选点
 4. 所有 pin-align 候选点（标注它来自哪个基准 corner、哪对 pins）
-5. 所有合法候选点的：
+5. 所有 mixed-corner 候选点
+6. 所有合法候选点的：
    - `(x, y, rotate)`
    - `ΔH`
    - `ΔHPWL`

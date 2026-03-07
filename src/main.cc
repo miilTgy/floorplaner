@@ -1,6 +1,7 @@
 #include "parser.h"
 #include "orderer.h"
 #include "init_planer.h"
+#include "writer.h"
 
 namespace {
 
@@ -27,6 +28,21 @@ bool debug_enabled(int argc, char **argv) {
   }
   const char *env = std::getenv("DEBUG");
   return env && std::string(env) == "1";
+}
+
+std::string derive_solution_path(const std::string &input_path) {
+  const size_t slash = input_path.find_last_of("/\\");
+  const std::string base = (slash == std::string::npos)
+                               ? input_path
+                               : input_path.substr(slash + 1);
+  if (base.empty()) {
+    throw std::runtime_error("main: invalid input path");
+  }
+
+  const size_t dot = base.find_last_of('.');
+  const std::string stem =
+      (dot == std::string::npos || dot == 0) ? base : base.substr(0, dot);
+  return stem + "_solution.txt";
 }
 
 }  // namespace
@@ -62,11 +78,14 @@ int main(int argc, char **argv) {
 
     std::vector<int> perm = build_initial_ordering(P);
     FloorplanResult fp = build_initial_floorplan(P, perm);
+    const std::string output_path = derive_solution_path(input_path);
+    write_solution(P, fp, output_path);
 
     std::cout << "Parsed OK: W=" << P.chipW << ", blocks=" << P.blocks.size()
               << ", pins=" << P.pins.size() << ", nets=" << P.nets.size()
               << ", ordering_len=" << perm.size() << ", H=" << fp.H
-              << ", hpwl=" << fp.hpwl << ", cost=" << fp.cost << "\n";
+              << ", hpwl=" << fp.hpwl << ", cost=" << fp.cost
+              << ", solution=" << output_path << "\n";
 
     if (debug) {
       dump_ordering_trace();
@@ -79,11 +98,12 @@ int main(int argc, char **argv) {
       dump_init_planer_debug(std::cout);
       std::cout << "Initial floorplan: H=" << fp.H << ", hpwl=" << fp.hpwl
                 << ", cost=" << fp.cost << "\n";
+      std::cout << "Solution written to: " << output_path << "\n";
     }
 
     // TODO: Improve fp with local search / SA within timeLimit
-    // TODO: Convert improved floorplan to final solution output
-    // TODO: write_solution(...)
+    // TODO: Rewrite solution file after improvement
+    // TODO: write_solution(P, improved_fp, output_path);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";
     return 1;

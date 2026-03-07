@@ -25,6 +25,7 @@ parser
 # IDE/editor settings
 .vscode/
 .cache/
+__pycache__/
 
 # OS files
 .DS_Store
@@ -38,3 +39,6 @@ cmake_install.cmake
 
 # Input files
 samples/
+
+# Output files
+*.txt
