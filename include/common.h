@@ -42,3 +42,34 @@ struct Problem {
   std::unordered_map<std::string, int> pin_id_of;
   std::unordered_map<std::string, int> net_id_of;
 };
+
+enum class CornerType {
+  RIGHT_DOWN,
+  LEFT_UP,
+};
+
+struct BlockCorner {
+  double x;
+  double y;
+  CornerType type;
+  int owner_block_id;
+};
+
+struct FloorplanItem {
+  int block_id;
+  double x;
+  double y;
+  int rotate;
+  double w_used;
+  double h_used;
+};
+
+struct FloorplanResult {
+  std::vector<double> x;
+  std::vector<double> y;
+  std::vector<int> rotate;
+  double H;
+  double hpwl;
+  double cost;
+  std::vector<FloorplanItem> items;
+};

@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "orderer.h"
+#include "init_planer.h"
 
 namespace {
 
@@ -59,11 +60,13 @@ int main(int argc, char **argv) {
       setenv("DEBUG", "1", 1);
     }
 
-    std::cout << "Parsed OK: W=" << P.chipW << ", blocks=" << P.blocks.size()
-    << ", pins=" << P.pins.size() << ", nets=" << P.nets.size()
-    << "\n";
-    
     std::vector<int> perm = build_initial_ordering(P);
+    FloorplanResult fp = build_initial_floorplan(P, perm);
+
+    std::cout << "Parsed OK: W=" << P.chipW << ", blocks=" << P.blocks.size()
+              << ", pins=" << P.pins.size() << ", nets=" << P.nets.size()
+              << ", ordering_len=" << perm.size() << ", H=" << fp.H
+              << ", hpwl=" << fp.hpwl << ", cost=" << fp.cost << "\n";
 
     if (debug) {
       dump_ordering_trace();
@@ -72,10 +75,14 @@ int main(int argc, char **argv) {
         std::cout << " " << P.blocks[static_cast<size_t>(id)].name;
       }
       std::cout << "\n";
+
+      dump_init_planer_debug(std::cout);
+      std::cout << "Initial floorplan: H=" << fp.H << ", hpwl=" << fp.hpwl
+                << ", cost=" << fp.cost << "\n";
     }
 
-    // TODO: Placement pl = decode_BL(P, perm, ...);
-    // TODO: State best = run_SA(P, init_state, time_limit);
+    // TODO: Improve fp with local search / SA within timeLimit
+    // TODO: Convert improved floorplan to final solution output
     // TODO: write_solution(...)
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";
