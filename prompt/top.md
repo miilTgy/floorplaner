@@ -111,7 +111,8 @@
 现在工程里已经新增第三个**无副作用**模块：
 
 3) Planer 模块（initial floorplan planner）  
-- API：`FloorplanResult build_initial_floorplan(const Problem& P, const std::vector<int>& perm);`
+- API（主入口）：`InitBStarResult build_initial_bstar_result(const Problem& P, const std::vector<int>& perm);`
+- API（兼容入口）：`FloorplanResult build_initial_floorplan(const Problem& P, const std::vector<int>& perm);`
 - 可选：`void dump_init_planer_debug(std::ostream& os);`
 - 该模块负责：
   - 根据 `Problem + perm` 构建一个合法的初始 floorplan
@@ -138,8 +139,9 @@
 ### 主流程（更新后）
 1. `Problem P = parse_problem(input_path);`
 2. `std::vector<int> perm = build_initial_ordering(P);`
-3. `FloorplanResult fp = build_initial_floorplan(P, perm);`
-4. 若 debug 开启：
+3. `InitBStarResult init = build_initial_bstar_result(P, perm);`
+4. `FloorplanResult fp = init.fp;`
+5. 若 debug 开启：
    - 如果项目里有 `dump_problem`：调用 `dump_problem(P, std::cout);`
    - 打印 ordering（按 block 名）：
      - `Ordering (by block name): ...`
@@ -147,7 +149,7 @@
    - 如果项目里有 `dump_init_planer_debug`：调用它（可选）
    - 额外打印初始 floorplan 的简短信息，例如：
      - `Initial floorplan: H=..., hpwl=..., cost=...`
-5. 无论是否 debug，都打印一行简短 summary（便于脚本检查）：
+6. 无论是否 debug，都打印一行简短 summary（便于脚本检查）：
    - `Parsed OK: W=..., blocks=..., pins=..., nets=..., ordering_len=..., H=..., hpwl=..., cost=...`
 
 ### 重要限制（补充）
@@ -228,11 +230,12 @@
 ### 主流程（再次更新后）
 1. `Problem P = parse_problem(input_path);`
 2. `std::vector<int> perm = build_initial_ordering(P);`
-3. `FloorplanResult fp = build_initial_floorplan(P, perm);`
-4. 根据输入文件路径 `input_path` 自动构造输出路径 `output_path`
-5. 调用：
+3. `InitBStarResult init = build_initial_bstar_result(P, perm);`
+4. `FloorplanResult fp = init.fp;`
+5. 根据输入文件路径 `input_path` 自动构造输出路径 `output_path`
+6. 调用：
    - `write_solution(P, fp, output_path);`
-6. 若 debug 开启：
+7. 若 debug 开启：
    - 如果项目里有 `dump_problem`：调用 `dump_problem(P, std::cout);`
    - 打印 ordering（按 block 名）：
      - `Ordering (by block name): ...`
@@ -242,7 +245,7 @@
      - `Initial floorplan: H=..., hpwl=..., cost=...`
    - 额外打印 writer 的输出路径：
      - `Solution written to: ...`
-7. 无论是否 debug，都打印一行简短 summary（便于脚本检查）：
+8. 无论是否 debug，都打印一行简短 summary（便于脚本检查）：
    - `Parsed OK: W=..., blocks=..., pins=..., nets=..., ordering_len=..., H=..., hpwl=..., cost=..., solution=...`
 
 ### output_path 的构造规则（必须实现）
@@ -312,3 +315,24 @@
 - 打印 summary
 - 在 debug 下打印 problem / ordering / planer 的 debug 信息
 - 为后续 SA 和改写最终 solution 文件预留 TODO 注释
+
+---
+
+## 最终覆盖要求（更高优先级）
+
+以下内容覆盖前文中与其冲突的旧描述：
+
+1. 允许并要求改动 `main.cc` 与 `init_planer.h` 相关数据结构，使 SA 可直接接收初始树状态。
+2. `main` 主流程必须先调用：
+   - `InitBStarResult init = build_initial_bstar_result(P, perm);`
+   - `FloorplanResult fp = init.fp;`
+3. `init` 路径输出继续复用 writer 写 `fp`，但 SA 路径必须直接使用：
+   - `init.tree`
+   - `init.rotate`
+   - `init.fp`
+   - `init.cost`
+4. 禁止任何 `floorplan -> B*-tree` 路径；若缺少树状态，应视为流程设计错误。
+5. SA 预留 TODO 必须体现树状态传递，例如：
+   - `// TODO: SAState state{init.tree, init.rotate, init.fp, init.cost};`
+   - `// TODO: SAResult best = run_sa(P, state, timeLimit, ...);`
+   - `// TODO: write_solution(P, best.fp, output_path);`

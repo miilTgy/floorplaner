@@ -584,7 +584,11 @@ FloorplanResult bstar_tree_to_floorplan(const Problem &P, const BStarTree &tree,
   validate_tree_geometry_edges_dfs(P, tree.root, fp);
   validate_layout_width(P, fp);
   fp.hpwl = compute_hpwl(P, fp);
-  fp.cost = fp.H + fp.hpwl;
+  if (P.nets.empty()) {
+    fp.cost = fp.H;
+  } else {
+    fp.cost = fp.H + fp.hpwl / static_cast<double>(P.nets.size());
+  }
 
   validate_floorplan_output(P, fp);
   return fp;

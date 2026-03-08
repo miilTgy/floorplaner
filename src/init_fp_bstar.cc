@@ -359,7 +359,8 @@ RemapContext build_subproblem(const Problem &P, const BStarTree &tree,
 }
 
 CandidateEval eval_cost_from_tree(const Problem &P, const BStarTree &tree,
-                                  const std::vector<int> &rotate_global) {
+                                  const std::vector<int> &rotate_global,
+                                  size_t net_count_for_cost) {
   CandidateEval out;
   RemapContext remap = build_subproblem(P, tree, rotate_global);
   out.fp = bstar_tree_to_floorplan(remap.sub_problem, remap.sub_tree, remap.sub_rotate);
@@ -371,7 +372,7 @@ CandidateEval eval_cost_from_tree(const Problem &P, const BStarTree &tree,
   }
 
   out.layout_width = compute_layout_width(out.fp);
-  out.cost = eval_floorplan_cost(out.fp, remap.placed_net_count);
+  out.cost = eval_floorplan_cost(out.fp, net_count_for_cost);
   return out;
 }
 
@@ -447,15 +448,21 @@ void dump_bstar_tree_text(const BStarTree &tree, const FloorplanResult &fp,
 
 }  // namespace
 
-FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int> &perm) {
+InitBStarResult build_initial_bstar_result(const Problem &P,
+                                           const std::vector<int> &perm) {
   clear_init_planer_debug();
   validate_perm(P, perm);
 
   const int n = static_cast<int>(P.blocks.size());
+  const size_t num_nets_for_cost = P.nets.size();
   if (n == 0) {
-    FloorplanResult empty;
-    empty.H = 0.0;
-    empty.hpwl = 0.0;
+    InitBStarResult empty;
+    empty.tree.root = nullptr;
+    empty.tree.nodes.clear();
+    empty.rotate.clear();
+    empty.fp.H = 0.0;
+    empty.fp.hpwl = 0.0;
+    empty.fp.cost = 0.0;
     empty.cost = 0.0;
     return empty;
   }
@@ -474,7 +481,7 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
     rotate_try[static_cast<size_t>(root_block)] = r;
 
     try {
-      CandidateEval eval = eval_cost_from_tree(P, root_tree, rotate_try);
+      CandidateEval eval = eval_cost_from_tree(P, root_tree, rotate_try, num_nets_for_cost);
       std::ostringstream ss;
       ss << "[INIT_FP_BSTAR] seed-candidate block=" << root_block << " rotate=" << r
          << " H=" << eval.fp.H << " hpwl=" << eval.fp.hpwl << " cost=" << eval.cost
@@ -567,7 +574,8 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
             std::vector<int> cand_rotate = current_best.rotate;
             cand_rotate[static_cast<size_t>(new_block)] = r;
 
-            CandidateEval eval = eval_cost_from_tree(P, cand_tree, cand_rotate);
+            CandidateEval eval =
+                eval_cost_from_tree(P, cand_tree, cand_rotate, num_nets_for_cost);
             ++valid_count;
 
             std::ostringstream ss;
@@ -628,7 +636,7 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
     throw std::runtime_error("init_fp_bstar: final decode does not cover all blocks");
   }
   const double final_width = compute_layout_width(final_fp);
-  eval_floorplan_cost(final_fp, P.nets.size());
+  eval_floorplan_cost(final_fp, num_nets_for_cost);
 
   const std::string tree_dump_filename = derive_tree_dump_filename();
   dump_bstar_tree_text(current_best.tree, final_fp, current_best.rotate, tree_dump_filename);
@@ -640,7 +648,16 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
           << " layout_width=" << final_width << " chipW=" << P.chipW;
   debug_log(done_ss.str());
 
-  return final_fp;
+  InitBStarResult out;
+  out.tree = std::move(current_best.tree);
+  out.rotate = std::move(current_best.rotate);
+  out.fp = std::move(final_fp);
+  out.cost = out.fp.cost;
+  return out;
+}
+
+FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int> &perm) {
+  return build_initial_bstar_result(P, perm).fp;
 }
 
 void dump_init_planer_debug(std::ostream &os) {

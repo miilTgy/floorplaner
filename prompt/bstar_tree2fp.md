@@ -85,9 +85,10 @@
    - `layout_width = max_i (x_i + w_used_i)`
    - `layout_width <= P.chipW`（含 `eps`）
 9. `hpwl` 正确按 net 计算
-10. `cost` 先给一个清晰可解释的默认实现，例如：
-   - `cost = H + hpwl`
-   或写成独立 helper，便于后续替换
+10. `cost` 必须与 init 流程统一：
+   - `numNets = P.nets.size()`
+   - `cost = H + hpwl / numNets`
+   - 当 `numNets == 0` 时退化为 `cost = H`
 
 如果树非法（例如 root 为空、block_id 越界、同一 block 出现多次、存在环、节点数不覆盖全部 block），要抛出清晰的 `std::runtime_error`。
 
@@ -209,6 +210,8 @@
 
 - `items` 建议按 `block_id` 升序输出，保证 deterministic
 - `H = max_i (y_i + h_used_i)`
+- `numNets = P.nets.size()`
+- `fp.cost = fp.H + fp.hpwl / numNets`，若 `numNets == 0` 则 `fp.cost = fp.H`
 
 ---
 

@@ -84,7 +84,8 @@ int main(int argc, char **argv) {
     const std::string input_stem = derive_input_stem(input_path);
     setenv("INIT_FP_BSTAR_INPUT_STEM", input_stem.c_str(), 1);
     std::vector<int> perm = build_initial_ordering(P);
-    FloorplanResult fp = build_initial_floorplan(P, perm);
+    InitBStarResult init = build_initial_bstar_result(P, perm);
+    FloorplanResult fp = init.fp;
     const std::string output_path = derive_solution_path(input_path);
     write_solution(P, fp, output_path);
 
@@ -108,9 +109,10 @@ int main(int argc, char **argv) {
       std::cout << "Solution written to: " << output_path << "\n";
     }
 
-    // TODO: Improve fp with local search / SA within timeLimit
+    // TODO: SAState state{init.tree, init.rotate, init.fp, init.cost};
+    // TODO: SAResult best = run_sa(P, state, time_limit, ...);
     // TODO: Rewrite solution file after improvement
-    // TODO: write_solution(P, improved_fp, output_path);
+    // TODO: write_solution(P, best.fp, output_path);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";
     return 1;

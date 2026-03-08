@@ -1,6 +1,6 @@
 # init_fp_bstar.md
 
-你是一个资深 C++17 工程师。现在我的工程中已经存在并且**不要修改公共 API** 的文件有：
+你是一个资深 C++17 工程师。现在我的工程中已经存在并且默认不要修改公共 API 的文件有：
 
 - `common.h`
 - `init_planer.h`
@@ -18,15 +18,17 @@
 - `BStarNode`
 - `BStarTree`
 - `bstar_tree2fp(...)` 的接口
-- `init_planer.h` 中已有的三个函数声明
+- `init_planer.h` 中已有声明（并按本提示词新增结果结构/新入口）
 
-然后**新增实现一个模块**：
+然后实现以下改动：
 
-- `init_fp_bstar.cc`
+- 在 `init_planer.h` 新增结果结构与新入口声明
+- 在 `init_fp_bstar.cc` 实现相关逻辑
 
 要求：
-- 不修改任何已有头文件的公共接口
-- 只在 `init_fp_bstar.cc` 中实现 `init_planer.h` 已声明的函数
+- 除 `init_planer.h` 外，不修改任何已有头文件的公共接口
+- 允许在 `init_planer.h` 中新增结果结构与新入口 API
+- `init_fp_bstar.cc` 中实现 `init_planer.h` 声明的全部相关函数
 - 内部可以定义任意私有 helper / 私有结构
 
 ---
@@ -46,15 +48,23 @@
    - 得到候选 `FloorplanResult`
    - 计算 cost
    - 选择 cost 最小的候选
-4. 最终返回最优初始 `FloorplanResult`
+4. 新入口返回最优初始结果对象（包含 `tree/rotate/fp/cost`），并保留旧入口返回 `FloorplanResult` 兼容调用方
 
 ---
 
-## 2. 必须实现的对外函数
+## 2. 必须实现的对外类型与函数
 
-你必须在 `init_fp_bstar.cc` 中实现以下三个函数，签名必须与 `init_planer.h` 一致：
+你必须在 `init_planer.h` 中新增如下公共类型与新入口，并在 `init_fp_bstar.cc` 实现对应函数：
 
 ```cpp
+struct InitBStarResult {
+    BStarTree tree;
+    std::vector<int> rotate;
+    FloorplanResult fp;
+    double cost;
+};
+
+InitBStarResult build_initial_bstar_result(const Problem& P, const std::vector<int>& perm);
 FloorplanResult build_initial_floorplan(const Problem& P, const std::vector<int>& perm);
 void dump_init_planer_debug(std::ostream& os);
 void clear_init_planer_debug();
@@ -62,9 +72,18 @@ void clear_init_planer_debug();
 
 说明：
 
-- `main.cc` 仍然只会调用这三个函数
-- 不能要求修改 `main.cc`
-- 最终只输出 `init_fp_bstar.cc`
+- 现有 `build_initial_floorplan(...)` / debug API 必须保留并可正常工作
+- 兼容行为必须明确：`build_initial_floorplan(...)` 作为 wrapper，内部调用 `build_initial_bstar_result(...)` 并返回 `result.fp`
+- 允许并建议修改 `main.cc`，使 SA 主链路直接使用 `build_initial_bstar_result(...)`
+- 最终输出至少包含 `init_planer.h` 与 `init_fp_bstar.cc`
+
+---
+
+## 2.1 禁止项（硬约束）
+
+- 禁止任何 `floorplan -> B*-tree` 路径、建议或备选方案。
+- SA 初始化必须使用 `build_initial_bstar_result(...)` 返回的 `tree` 与 `rotate`。
+- 若实现中缺少树状态，应视为流程设计错误，而不是允许补救路径。
 
 ---
 
@@ -127,8 +146,9 @@ void clear_init_planer_debug();
 
 统一口径：候选比较与最终返回都使用同一 cost 定义：
 
-- `cost = fp.H + fp.hpwl / numNet`
-- 当 `numNet == 0` 时退化为 `cost = fp.H`
+- `numNets = P.nets.size()`
+- `cost = fp.H + fp.hpwl / numNets`
+- 当 `numNets == 0` 时退化为 `cost = fp.H`
 
 芯片宽度合法性由 `bstar_tree2fp(...)` 作为硬约束负责；planner 通过捕获解码异常过滤非法候选。
 
@@ -363,19 +383,28 @@ void dump_bstar_tree_text(
 
 ## 13. 最终返回结果要求
 
-`build_initial_floorplan(...)` 最终返回：
+`build_initial_bstar_result(...)` 最终返回：
 
-- 当前最优完整树解码得到的 `FloorplanResult`
+- `InitBStarResult`，其中包含：
+  - `tree`：当前最优完整 B\*-tree
+  - `rotate`：与 `P.blocks` 对齐的旋转向量
+  - `fp`：`tree` 解码得到的 `FloorplanResult`
+  - `cost`：与 `fp.cost` 一致
+
+`build_initial_floorplan(...)` 兼容返回：
+
+- `build_initial_bstar_result(...).fp`
 
 要求：
 
-- `items.size() == P.blocks.size()`
+- `result.fp.items.size() == P.blocks.size()`
 - 所有 block 都已放置
+- `result.cost == result.fp.cost`
 - `fp.cost` 必须等于：
   ```cpp
-  fp.H + fp.hpwl / numNet
+  fp.H + fp.hpwl / numNets
   ```
-  或在 `numNet == 0` 时退化为 `fp.H`
+  其中 `numNets = P.nets.size()`，在 `numNets == 0` 时退化为 `fp.H`
 - 返回前必须确保 `fp.cost` 已正确填写
 
 ---
@@ -384,13 +413,13 @@ void dump_bstar_tree_text(
 
 - 使用 C++17
 - 输出完整可编译代码，不要伪代码
-- 不修改已有公共头文件
+- 除 `init_planer.h` 的新增声明外，不修改其他公共头文件
 - 正确性优先于性能
 - 第一版允许对每个候选都完整复制树并重新解码，不必做增量优化
 - 注释简洁明确，重点解释：
   - 候选插入位置如何枚举
   - 为什么第一版只枚举空 left / 空 right
-  - cost 使用 `H + HPWL / numNet`
+  - cost 使用 `H + HPWL / numNets`
   - 非法候选如何过滤
 
 ---
@@ -399,6 +428,7 @@ void dump_bstar_tree_text(
 
 请直接输出完整可编译的：
 
+- `init_planer.h`
 - `init_fp_bstar.cc`
 
 要求它能够：
@@ -407,7 +437,9 @@ void dump_bstar_tree_text(
 - 每一步枚举所有空 left / 空 right 插入位置
 - 对每个候选调用 `bstar_tree2fp(...)`
 - 仅接受 `bstar_tree2fp(...)` 成功解码的候选（宽度约束由解码器保证）
-- 在合法候选中按 `cost = fp.H + fp.hpwl / numNet`（`numNet==0` 时为 `fp.H`）选择最优插入
-- 返回最终合法且满足芯片宽度约束的 `FloorplanResult`
+- 在合法候选中按 `numNets = P.nets.size()` 与 `cost = fp.H + fp.hpwl / numNets`（`numNets==0` 时为 `fp.H`）选择最优插入
+- 新入口返回最终合法且满足芯片宽度约束的 `InitBStarResult`
+- 旧入口 `build_initial_floorplan(...)` 兼容返回 `FloorplanResult`
+- 禁止出现任何 `floorplan -> B*-tree` 路径
 - 支持 `dump_init_planer_debug(...)` 和 `clear_init_planer_debug()`
 - 在成功构造后将最终最优树输出到文本文件
