@@ -10,7 +10,8 @@ BIN_DIR = bin
 PARSER_SRC = $(SRC_DIR)/parser.cc
 # ORDERER_SRC = $(SRC_DIR)/orderer.cc
 ORDERER_SRC = $(SRC_DIR)/orderer2.cc
-PLANER_SRC = $(SRC_DIR)/init_planer.cc
+# PLANER_SRC = $(SRC_DIR)/init_planer.cc
+PLANER_SRC += $(SRC_DIR)/init_planer_admissible.cc
 WRITER_SRC = $(SRC_DIR)/writer.cc
 MAIN_SRC = $(SRC_DIR)/main.cc
 
