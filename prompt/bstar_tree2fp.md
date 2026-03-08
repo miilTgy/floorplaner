@@ -51,12 +51,16 @@
   - 几何含义是：**child 放在 parent 的右边**
   - 即：
     - `x_child = x_parent + w_parent_used`
+    - 且 child 与 parent 在竖直方向必须存在**非空接触区间**（重叠长度 `> eps`）
 
 - 若 `child` 是 `parent.right`：
   - child 表示 parent 的右孩子
   - 几何含义是：**child 与 parent 左边界对齐**
   - 即：
     - `x_child = x_parent`
+    - `y_child = y_parent + h_parent_used`（允许 `eps` 误差）
+
+若任一父子不满足上述几何关系，则此次解码非法，必须抛出 `std::runtime_error`。
 
 注意：
 - 这里的 `w_parent_used / h_parent_used` 必须使用 **旋转后的实际尺寸**
@@ -105,6 +109,10 @@
 - left child 决定“向右放”
 - right child 决定“左边界对齐”
 - **真正的 y 由 contour 决定**
+- contour 只能用于求候选 `y`，不是 B*-tree 几何合法性的最终判据
+- child 落位后，必须立刻检查它和 parent 是否满足 B*-tree 几何关系
+- 若不满足，必须立即抛 `std::runtime_error`
+- 不能只因为“不重叠”就接受
 
 ### 4.2 根节点
 - root 放在 `(0, 0)`
@@ -153,6 +161,8 @@
 - `double query_contour_y(double xL, double xR)`
 - `void update_contour(double xL, double xR, double newTop)`
 - `void place_subtree(const BStarNode* node, double x, ...)`
+- `void validate_left_child_geometry(...)`
+- `void validate_right_child_geometry(...)`
 - `double compute_hpwl(const Problem&, const FloorplanResult&)`
 
 ### 5.3 遍历顺序
@@ -229,6 +239,9 @@ void dump_bstar_tree2fp_debug(const FloorplanResult &fp, const std::string &file
 * 存在未访问 block
 * 放置后出现重叠
 * 布局宽度超过芯片上限（`layout_width > P.chipW`）
+* left child 未贴 parent 右边界
+* right child 未贴 parent 顶边
+* floorplan 虽不重叠但不满足 B*-tree 几何定义
 * `x/y` 为负
 * `items` 与 `x/y/rotate` 不一致
 
@@ -259,5 +272,6 @@ void dump_bstar_tree2fp_debug(const FloorplanResult &fp, const std::string &file
 
 * 根据 `BStarTree` 解码出合法、不重叠的 floorplan
 * 保证输出满足芯片宽度上限（`layout_width <= P.chipW`）
+* 保证输出满足 B*-tree 父子几何定义（left 接触、right 贴顶）
 * 输出格式严格对齐 `common.h`
 * 为后续 `init_fp_bstar` 和 SA 提供稳定的评估基础
