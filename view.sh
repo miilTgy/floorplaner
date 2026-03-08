@@ -18,6 +18,15 @@ fi
 
 INPUT_PATH="samples/sample_${SAMPLE_ID}.txt"
 SOL_PATH="sample_${SAMPLE_ID}_solution.txt"
+TREE_PATH_NEW="init_fp_bstar_tree_sample_${SAMPLE_ID}.txt"
+TREE_PATH_OLD="init_fp_bstar_tree.txt"
+
+TREE_PATH=""
+if [[ -f "${TREE_PATH_NEW}" ]]; then
+  TREE_PATH="${TREE_PATH_NEW}"
+elif [[ -f "${TREE_PATH_OLD}" ]]; then
+  TREE_PATH="${TREE_PATH_OLD}"
+fi
 
 if [[ ! -f "${INPUT_PATH}" ]]; then
   echo "Error: input file not found: ${INPUT_PATH}" >&2
@@ -29,8 +38,29 @@ if [[ ! -f "${SOL_PATH}" ]]; then
   exit 1
 fi
 
-exec make visualize \
+if [[ -z "${TREE_PATH}" ]]; then
+  echo "Error: B*-tree file not found. Tried '${TREE_PATH_NEW}' and '${TREE_PATH_OLD}'." >&2
+  echo "Hint: run 'make run INPUT=${INPUT_PATH} T=1' first to generate the tree file." >&2
+  exit 1
+fi
+
+make visualize \
   "INPUT=${INPUT_PATH}" \
   "SOL=${SOL_PATH}" \
   "SHOW_PINS=1" \
-  "PIN_LABELS=1"
+  "PIN_LABELS=1" &
+PID_FP=$!
+
+python bstar.py --bstar "${TREE_PATH}" --sample "${INPUT_PATH}" --show &
+PID_TREE=$!
+
+STATUS=0
+
+if ! wait "${PID_FP}"; then
+  STATUS=1
+fi
+if ! wait "${PID_TREE}"; then
+  STATUS=1
+fi
+
+exit "${STATUS}"
