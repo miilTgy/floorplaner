@@ -30,7 +30,7 @@ bool debug_enabled(int argc, char **argv) {
   return env && std::string(env) == "1";
 }
 
-std::string derive_solution_path(const std::string &input_path) {
+std::string derive_input_stem(const std::string &input_path) {
   const size_t slash = input_path.find_last_of("/\\");
   const std::string base = (slash == std::string::npos)
                                ? input_path
@@ -42,6 +42,11 @@ std::string derive_solution_path(const std::string &input_path) {
   const size_t dot = base.find_last_of('.');
   const std::string stem =
       (dot == std::string::npos || dot == 0) ? base : base.substr(0, dot);
+  return stem;
+}
+
+std::string derive_solution_path(const std::string &input_path) {
+  const std::string stem = derive_input_stem(input_path);
   return stem + "_solution.txt";
 }
 
@@ -76,6 +81,8 @@ int main(int argc, char **argv) {
       setenv("DEBUG", "1", 1);
     }
 
+    const std::string input_stem = derive_input_stem(input_path);
+    setenv("INIT_FP_BSTAR_INPUT_STEM", input_stem.c_str(), 1);
     std::vector<int> perm = build_initial_ordering(P);
     FloorplanResult fp = build_initial_floorplan(P, perm);
     const std::string output_path = derive_solution_path(input_path);
