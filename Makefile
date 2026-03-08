@@ -11,11 +11,14 @@ PARSER_SRC = $(SRC_DIR)/parser.cc
 # ORDERER_SRC = $(SRC_DIR)/orderer.cc
 ORDERER_SRC = $(SRC_DIR)/orderer2.cc
 # PLANER_SRC = $(SRC_DIR)/init_planer.cc
-PLANER_SRC += $(SRC_DIR)/init_planer_admissible.cc
+# PLANER_SRC = $(SRC_DIR)/init_planer_admissible.cc
+PLANER_SRC = $(SRC_DIR)/init_fp_bstar.cc
+BSTAR2FP_SRC = $(SRC_DIR)/bstar_tree2fp.cc
+# FP2BSTAR_SRC = $(SRC_DIR)/fp2bstar_tree.cc
 WRITER_SRC = $(SRC_DIR)/writer.cc
 MAIN_SRC = $(SRC_DIR)/main.cc
 
-SRCS := $(PARSER_SRC) $(ORDERER_SRC) $(PLANER_SRC) $(WRITER_SRC) $(MAIN_SRC)
+SRCS := $(PARSER_SRC) $(ORDERER_SRC) $(PLANER_SRC) $(BSTAR2FP_SRC) $(WRITER_SRC) $(MAIN_SRC)
 OBJS := $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(SRCS))
 
 TARGET = $(BIN_DIR)/floorplan
