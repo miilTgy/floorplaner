@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -16,7 +17,9 @@
 namespace {
 
 constexpr double kEps = 1e-9;
-constexpr const char *kTreeDumpFilename = "init_fp_bstar_tree.txt";
+constexpr const char *kInputStemEnv = "INIT_FP_BSTAR_INPUT_STEM";
+constexpr const char *kTreeDumpPrefix = "init_fp_bstar_tree_";
+constexpr const char *kTreeDumpFallback = "init_fp_bstar_tree_unknown.txt";
 
 struct CandidateEval {
   FloorplanResult fp;
@@ -50,6 +53,18 @@ std::vector<std::string> g_debug_lines;
 bool approx_eq(double a, double b) { return std::abs(a - b) <= kEps; }
 
 void debug_log(const std::string &line) { g_debug_lines.push_back(line); }
+
+std::string derive_tree_dump_filename() {
+  const char *stem_env = std::getenv(kInputStemEnv);
+  if (stem_env == nullptr) {
+    return kTreeDumpFallback;
+  }
+  const std::string stem(stem_env);
+  if (stem.empty()) {
+    return kTreeDumpFallback;
+  }
+  return std::string(kTreeDumpPrefix) + stem + ".txt";
+}
 
 std::string join_ints(const std::vector<int> &vals) {
   if (vals.empty()) {
@@ -615,8 +630,9 @@ FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int>
   const double final_width = compute_layout_width(final_fp);
   eval_floorplan_cost(final_fp, P.nets.size());
 
-  dump_bstar_tree_text(current_best.tree, final_fp, current_best.rotate, kTreeDumpFilename);
-  debug_log(std::string("[INIT_FP_BSTAR] tree_dump=") + kTreeDumpFilename);
+  const std::string tree_dump_filename = derive_tree_dump_filename();
+  dump_bstar_tree_text(current_best.tree, final_fp, current_best.rotate, tree_dump_filename);
+  debug_log(std::string("[INIT_FP_BSTAR] tree_dump=") + tree_dump_filename);
 
   std::ostringstream done_ss;
   done_ss << "[INIT_FP_BSTAR] done nodes=" << current_best.tree.nodes.size()

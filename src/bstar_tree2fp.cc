@@ -29,6 +29,8 @@ struct PlacementState {
   std::vector<Segment> contour;
 };
 
+enum class ChildRelation { kRoot = 0, kLeft = 1, kRight = 2 };
+
 bool approx_eq(double a, double b) { return std::abs(a - b) <= kEps; }
 
 bool overlap_1d_open(double l1, double r1, double l2, double r2) {
@@ -226,7 +228,88 @@ void update_contour(std::vector<Segment> &contour, double x_l, double x_r, doubl
   contour.swap(updated);
 }
 
-void place_subtree(const BStarNode *node, double x_target, PlacementState &state) {
+void validate_left_child_geometry(int parent_id, int child_id, double parent_x, double parent_y,
+                                  double parent_w, double parent_h, double child_x, double child_y,
+                                  double child_w, double child_h) {
+  const double parent_right = parent_x + parent_w;
+  const double parent_top = parent_y + parent_h;
+  const double child_top = child_y + child_h;
+
+  if (!approx_eq(child_x, parent_right)) {
+    std::ostringstream oss;
+    oss << "bstar_tree2fp: left child is not abutting parent right boundary, parent="
+        << parent_id << ", child=" << child_id << ", child_x=" << child_x
+        << ", expected_x=" << parent_right;
+    throw std::runtime_error(oss.str());
+  }
+
+  const double overlap = std::min(parent_top, child_top) - std::max(parent_y, child_y);
+  if (!(overlap > kEps)) {
+    std::ostringstream oss;
+    oss << "bstar_tree2fp: left child has no positive vertical contact with parent, parent="
+        << parent_id << ", child=" << child_id << ", overlap=" << overlap;
+    throw std::runtime_error(oss.str());
+  }
+
+  (void)child_w;
+}
+
+void validate_right_child_geometry(int parent_id, int child_id, double parent_x, double parent_y,
+                                   double parent_w, double parent_h, double child_x, double child_y,
+                                   double child_w, double child_h) {
+  const double expected_y = parent_y + parent_h;
+  if (!approx_eq(child_x, parent_x)) {
+    std::ostringstream oss;
+    oss << "bstar_tree2fp: right child is not aligned with parent left boundary, parent="
+        << parent_id << ", child=" << child_id << ", child_x=" << child_x
+        << ", expected_x=" << parent_x;
+    throw std::runtime_error(oss.str());
+  }
+  if (!approx_eq(child_y, expected_y)) {
+    std::ostringstream oss;
+    oss << "bstar_tree2fp: right child is not abutting parent top boundary, parent="
+        << parent_id << ", child=" << child_id << ", child_y=" << child_y
+        << ", expected_y=" << expected_y;
+    throw std::runtime_error(oss.str());
+  }
+
+  (void)parent_w;
+  (void)child_w;
+  (void)child_h;
+}
+
+void validate_parent_child_geometry(const PlacementState &state, int parent_id, int child_id,
+                                    ChildRelation relation, double child_x, double child_y,
+                                    double child_w, double child_h) {
+  if (relation == ChildRelation::kRoot) {
+    return;
+  }
+  if (parent_id < 0 || static_cast<size_t>(parent_id) >= state.x.size()) {
+    throw std::runtime_error("bstar_tree2fp: invalid parent_id during geometry validation");
+  }
+  if (child_id < 0 || static_cast<size_t>(child_id) >= state.x.size()) {
+    throw std::runtime_error("bstar_tree2fp: invalid child_id during geometry validation");
+  }
+  if (!state.placed[static_cast<size_t>(parent_id)]) {
+    throw std::runtime_error("bstar_tree2fp: parent is not placed before child geometry validation");
+  }
+
+  const double parent_x = state.x[static_cast<size_t>(parent_id)];
+  const double parent_y = state.y[static_cast<size_t>(parent_id)];
+  const double parent_w = state.w_used[static_cast<size_t>(parent_id)];
+  const double parent_h = state.h_used[static_cast<size_t>(parent_id)];
+
+  if (relation == ChildRelation::kLeft) {
+    validate_left_child_geometry(parent_id, child_id, parent_x, parent_y, parent_w, parent_h,
+                                 child_x, child_y, child_w, child_h);
+    return;
+  }
+  validate_right_child_geometry(parent_id, child_id, parent_x, parent_y, parent_w, parent_h,
+                                child_x, child_y, child_w, child_h);
+}
+
+void place_subtree(const BStarNode *node, double x_target, PlacementState &state, int parent_id,
+                  ChildRelation relation) {
   if (node == nullptr) {
     return;
   }
@@ -258,10 +341,49 @@ void place_subtree(const BStarNode *node, double x_target, PlacementState &state
   state.h_used[static_cast<size_t>(block_id)] = h;
   state.placed[static_cast<size_t>(block_id)] = true;
 
+  validate_parent_child_geometry(state, parent_id, block_id, relation, x, y_norm, w, h);
+
   update_contour(state.contour, x, x + w, top);
 
-  place_subtree(node->left, x + w, state);
-  place_subtree(node->right, x, state);
+  place_subtree(node->left, x + w, state, block_id, ChildRelation::kLeft);
+  place_subtree(node->right, x, state, block_id, ChildRelation::kRight);
+}
+
+void validate_tree_geometry_edges_dfs(const Problem &P, const BStarNode *node,
+                                      const FloorplanResult &fp) {
+  if (node == nullptr) {
+    return;
+  }
+
+  const int parent_id = node->block_id;
+  const int parent_rotate = fp.rotate[static_cast<size_t>(parent_id)];
+  const auto parent_size = used_size(P, parent_id, parent_rotate);
+  const double parent_x = fp.x[static_cast<size_t>(parent_id)];
+  const double parent_y = fp.y[static_cast<size_t>(parent_id)];
+  const double parent_w = parent_size.first;
+  const double parent_h = parent_size.second;
+
+  if (node->left != nullptr) {
+    const int child_id = node->left->block_id;
+    const int child_rotate = fp.rotate[static_cast<size_t>(child_id)];
+    const auto child_size = used_size(P, child_id, child_rotate);
+    validate_left_child_geometry(parent_id, child_id, parent_x, parent_y, parent_w, parent_h,
+                                 fp.x[static_cast<size_t>(child_id)],
+                                 fp.y[static_cast<size_t>(child_id)], child_size.first,
+                                 child_size.second);
+  }
+  if (node->right != nullptr) {
+    const int child_id = node->right->block_id;
+    const int child_rotate = fp.rotate[static_cast<size_t>(child_id)];
+    const auto child_size = used_size(P, child_id, child_rotate);
+    validate_right_child_geometry(parent_id, child_id, parent_x, parent_y, parent_w, parent_h,
+                                  fp.x[static_cast<size_t>(child_id)],
+                                  fp.y[static_cast<size_t>(child_id)], child_size.first,
+                                  child_size.second);
+  }
+
+  validate_tree_geometry_edges_dfs(P, node->left, fp);
+  validate_tree_geometry_edges_dfs(P, node->right, fp);
 }
 
 void rotate_pin_offset(const Pin &pin, int rotate, double &dx_rot, double &dy_rot) {
@@ -434,7 +556,7 @@ FloorplanResult bstar_tree_to_floorplan(const Problem &P, const BStarTree &tree,
   state.placed.assign(n, false);
   state.contour.clear();
 
-  place_subtree(tree.root, 0.0, state);
+  place_subtree(tree.root, 0.0, state, -1, ChildRelation::kRoot);
 
   for (size_t i = 0; i < n; ++i) {
     if (!state.placed[i]) {
@@ -459,6 +581,7 @@ FloorplanResult bstar_tree_to_floorplan(const Problem &P, const BStarTree &tree,
     fp.H = std::max(fp.H, fp.y[id] + state.h_used[id]);
   }
 
+  validate_tree_geometry_edges_dfs(P, tree.root, fp);
   validate_layout_width(P, fp);
   fp.hpwl = compute_hpwl(P, fp);
   fp.cost = fp.H + fp.hpwl;
