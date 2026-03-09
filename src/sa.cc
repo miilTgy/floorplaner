@@ -29,7 +29,7 @@ constexpr double kMoveProb = 0.4;  // Sampling weight assigned to Move perturbat
 constexpr double kSwapProb = 0.3;  // Sampling weight assigned to Swap perturbations.
 constexpr unsigned int kRandomSeed = 0;  // Fixed RNG seed used to keep SA runs deterministic.
 constexpr double kStagnationEpsilon = 1e-9;  // Best-cost delta treated as "no meaningful improvement".
-constexpr int kStagnationOuterLoops = 800;  // Number of consecutive stagnant outer loops allowed before stop.
+constexpr int kStagnationOuterLoops = 20;  // Number of consecutive stagnant outer loops allowed before stop.
 
 struct EditableNode {
   int block_id = -1;
