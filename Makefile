@@ -44,7 +44,7 @@ $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 run: floorplan
-	./floorplan $(INPUT) $(T) --mode sa
+	./floorplan $(INPUT) $(T) --mode sa # --debug
 
 visualize:
 	@if [ -z "$(INPUT)" ] || [ -z "$(SOL)" ]; then \
