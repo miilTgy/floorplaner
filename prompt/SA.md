@@ -29,7 +29,7 @@ SA 必须支持以下三种扰动：
 
 2. **Swap**
    - 随机选择两个树节点
-   - **只交换 block id / block reference / rotation state**
+   - **只交换 block id**
    - **不要交换整棵子树，不要交换 parent/child 指针**
    - 也就是说，树结构保持不变，仅节点上承载的模块身份互换
 
@@ -60,7 +60,8 @@ SA 必须支持以下三种扰动：
 
 - **非法候选直接 reject**
   - 只要树结构非法，或者 decode 结果不满足 B\*-tree 几何合法性，或者 floorplan 非法，就立即 reject
-  - 上述非法情况不需要主动判定，bstar_tree2fp 模块会主动报 runtime error 。
+  - 树结构合法性由 SA 层主动检查；decode / 几何 / overlap 复用 `bstar_tree2fp`
+  - `bstar_tree2fp` 若报 runtime error，则视为 decode 或几何合法性检查失败
   - reject 后当前状态不变
 
 - **记录非法候选的操作过程**
@@ -123,7 +124,7 @@ SA 必须支持以下三种扰动：
 - 或右孩子没有与父节点左边界对齐
 - 或右孩子虽然在上面但没贴边
 - 或出现 overlap
-- 不是 admissible placement
+- 或不满足当前项目接受的合法 B\*-tree placement
 
 都必须判为 **非法候选** 并 reject。
 
@@ -190,9 +191,33 @@ SA 必须支持以下三种扰动：
 
 必须正确处理以下情形：
 
-1. `u` 是叶子
-2. `u` 只有一个孩子
-3. `u` 有两个孩子
+1. `u` 是叶子：删除后不变
+2. `u` 只有一个孩子：删除后将 `u` 的孩子接入 `u` 的父节点中原本 `u` 接入的位置
+3. `u` 有两个孩子：删除后按**固定替换策略**处理，规则如下：
+
+   - 记 `L = u.left`，`R = u.right`，`P = parent(u)`。
+   - 先用 `R` 顶替 `u` 在其父节点 `P` 处的位置：
+     - 如果 `u` 原本是 `P.left`，则令 `P.left = R`
+     - 如果 `u` 原本是 `P.right`，则令 `P.right = R`
+     - 同时更新 `R.parent = P`
+   - 然后将 `L` 挂到 `R` 子树中 **最左侧可继续沿 left 走到链的末端**：
+     - 从 `cur = R` 开始
+     - 当 `cur.left != null` 时，令 `cur = cur.left`
+     - 循环结束后，令 `cur.left = L`，并设置 `L.parent = cur`
+   - 最后将 `u.left / u.right / u.parent` 清空，使 `u` 成为孤立节点，等待后续 reinsert。
+
+   这样做的目标是：
+   - 删除后剩余节点仍保持为一棵连通二叉树
+   - 不丢失 `u` 的左右子树
+   - 每个非根节点仍只有一个父节点
+   - 不产生环
+
+   删除完成后必须立即执行一次 `validate_tree_structure_after_delete`，至少检查：
+   - 根唯一
+   - 从根可达所有节点
+   - 无环
+   - 每个非根节点恰有一个父节点
+   - 节点总数（树中节点数+ `u` ）正确
 
 删除后要求：
 
@@ -207,36 +232,265 @@ SA 必须支持以下三种扰动：
 - 这里的“delete”是为了后续 reinsert，不是彻底销毁模块
 - delete 后原树节点数减少 1，孤立节点 `u` 保留等待插入
 
-## B. Reinsert 操作
+## B. Reinsert 操作（decision-complete 版本）
 
-请实现 `reinsert_node_into_bstar_tree(node, position)`，其中 position 不是简单的“某个空 left/right child”。
+请实现 `reinsert_node_into_bstar_tree(u, position)`。  
+这里的 `u` 是一个已经从树中 delete 下来、当前处于孤立状态的节点。调用 reinsert 前必须保证：
 
-必须支持：
+- `u.parent == null`
+- `u.left == null`
+- `u.right == null`
 
-### 1）External position
-即插入到树外侧扩展位置。  
-典型表现是新节点成为某个节点的新孩子，并把原有关系适当下挂。  
-你需要根据当前仓库的树表示，明确定义 external position 的枚举方式与插入规则，并确保不会破坏树结构。
+也就是说，**reinsert 不负责保留 `u` 删除前的子树关系**；delete 完成后，`u` 必须已经是一个纯孤立节点。  
+reinsert 的职责只是：把这个孤立节点作为一个新的树节点插入当前树中某个合法位置。
 
-### 2）Internal position
-即插入到树内部位置。  
-这意味着不是只有“当前 child 为 null”时才能插入，而是允许把一个新节点插到某条现有父子关系之间：
+---
 
-- 原来 `p -> c`
-- 插入后变成 `p -> u -> c`
+### 1. position 的精确定义
 
-同时必须根据 B\*-tree 的 left/right child 语义，明确：
-- 插入的是 left edge 还是 right edge
-- 原 child 如何挂到新节点上
-- 另一侧 child 如何保持不变
-- 不允许因为插入导致子树丢失
+请不要用模糊的“插到某个 internal / external position”。  
+请把 position 明确定义为一个有限枚举，且每个枚举项都带完整参数。
 
-请显式枚举并实现 internal / external position 的表示方法，例如：
-- “把 u 插到 p 的 left edge 上”
-- “把 u 插到 p 的 right edge 上”
-- “把 u 插到 p.left 这条边中间”
-- “把 u 插到 p.right 这条边中间”
-具体命名可调整，但语义要清楚、可枚举、可 debug 输出。
+建议定义为以下四类：
+
+1. `EXTERNAL_LEFT(parent = p)`
+2. `EXTERNAL_RIGHT(parent = p)`
+3. `INTERNAL_LEFT(parent = p, old_child = c)`
+4. `INTERNAL_RIGHT(parent = p, old_child = c)`
+
+其含义分别固定如下。
+
+---
+
+### 2. 四类 position 的精确 rewiring 规则
+
+#### A. `EXTERNAL_LEFT(parent = p)`
+
+前置条件：
+
+- `p` 是树中现有节点
+- `p.left == null`
+- `u` 不是根
+- `u` 当前孤立
+
+rewiring 规则：
+
+- `p.left = u`
+- `u.parent = p`
+- `u.left = null`
+- `u.right = null`
+
+语义：
+
+- 将 `u` 作为 `p` 的一个新的左孩子插入
+- 这是 external position，因为它只在树外侧扩展，不替换任何现有边
+
+---
+
+#### B. `EXTERNAL_RIGHT(parent = p)`
+
+前置条件：
+
+- `p` 是树中现有节点
+- `p.right == null`
+- `u` 当前孤立
+
+rewiring 规则：
+
+- `p.right = u`
+- `u.parent = p`
+- `u.left = null`
+- `u.right = null`
+
+语义：
+
+- 将 `u` 作为 `p` 的一个新的右孩子插入
+- 这是 external position，因为它只在树外侧扩展，不替换任何现有边
+
+---
+
+#### C. `INTERNAL_LEFT(parent = p, old_child = c)`
+
+前置条件：
+
+- `p` 是树中现有节点
+- `c == p.left`
+- `c != null`
+- `u` 当前孤立
+- `c` 不在 `u` 的子树中（这里对孤立 `u` 恒成立，但仍保留此检查语义）
+
+rewiring 规则：
+
+- 原来边为：`p.left = c`
+- 插入后变为：`p.left = u`
+- `u.parent = p`
+- `u.left = c`
+- `u.right = null`
+- `c.parent = u`
+
+即：
+- 原结构：`p ->left c`
+- 新结构：`p ->left u ->left c`
+
+语义：
+
+- 把 `u` 插入到 `p.left` 这条边的中间
+- `u` 接管 `p.left`
+- 原来的 `c` 下沉成为 `u.left`
+
+注意：
+
+- **这里必须固定 old_child 继续挂在 `u.left`，不能让实现者自由决定挂左还是挂右**
+- 这样才能让 move 空间是确定的、可复现的、不同实现一致
+
+---
+
+#### D. `INTERNAL_RIGHT(parent = p, old_child = c)`
+
+前置条件：
+
+- `p` 是树中现有节点
+- `c == p.right`
+- `c != null`
+- `u` 当前孤立
+- `c` 不在 `u` 的子树中（这里对孤立 `u` 恒成立，但仍保留此检查语义）
+
+rewiring 规则：
+
+- 原来边为：`p.right = c`
+- 插入后变为：`p.right = u`
+- `u.parent = p`
+- `u.right = c`
+- `u.left = null`
+- `c.parent = u`
+
+即：
+- 原结构：`p ->right c`
+- 新结构：`p ->right u ->right c`
+
+语义：
+
+- 把 `u` 插入到 `p.right` 这条边的中间
+- `u` 接管 `p.right`
+- 原来的 `c` 下沉成为 `u.right`
+
+注意：
+
+- **这里必须固定 old_child 继续挂在 `u.right`**
+- 不允许实现者自己决定挂到 `u.left`
+
+---
+
+### 3. 为什么 internal 的 rewiring 必须写死成这样
+
+这里不要给实现者自由发挥。  
+请固定采用：
+
+- `INTERNAL_LEFT`：旧孩子下沉到 `u.left`
+- `INTERNAL_RIGHT`：旧孩子下沉到 `u.right`
+
+不要允许：
+- internal-left 时把旧孩子挂到 `u.right`
+- internal-right 时把旧孩子挂到 `u.left`
+- 或“任选一边”
+
+因为一旦允许自由选择，不同实现者会得到不同的 move 空间，SA 行为将不可比、不可复现，也无法稳定 debug。
+
+---
+
+### 4. root 相关约束
+
+本任务默认：
+
+- `Move` 只移动非根节点
+- `reinsert` 不允许直接把 `u` 插为新根
+- 根节点保持原根不变
+
+因此 position 枚举中 **不包含 root-replacement / new-root position**。  
+如果后续想扩展根级操作，请单独新增 position 类型，不要在本版里隐式支持。
+
+---
+
+### 5. position 枚举函数必须完整且确定
+
+请实现 `enumerate_reinsert_positions(tree, u)`，返回当前树上 **全部合法** 的 reinsert position，且顺序确定、可 debug。
+
+枚举规则固定为：
+
+- 对树中每个节点 `p`：
+  - 若 `p.left == null`，加入 `EXTERNAL_LEFT(p)`
+  - 若 `p.right == null`，加入 `EXTERNAL_RIGHT(p)`
+  - 若 `p.left != null`，加入 `INTERNAL_LEFT(p, p.left)`
+  - 若 `p.right != null`，加入 `INTERNAL_RIGHT(p, p.right)`
+
+注意：
+- 不要漏掉 internal position
+- 不要因为 external 已存在就跳过 internal
+- internal / external 是两类不同位置，若同时合法，必须都枚举出来
+
+---
+
+### 6. reinsert 后必须满足的结构条件
+
+每次 reinsert 完成后，必须立即运行 `validate_tree_structure`，至少检查：
+
+- 根唯一且不变
+- 无环
+- 所有节点从根可达
+- 每个非根节点恰有一个父节点
+- 没有节点丢失
+- 总节点数与 block 数一致
+- parent/left/right 三者关系一致
+
+任一失败，都视为本次 reinsert 非法。
+
+---
+
+### 7. 禁止的实现方式
+
+请不要实现成以下任意一种：
+
+- external / internal 只是一种“抽象标签”，但具体接线由代码临场决定
+- internal-left 时旧孩子挂哪边不固定
+- internal-right 时旧孩子挂哪边不固定
+- reinsert 时偷偷保留 `u` 删除前的 left/right 子树
+- 允许一个 position 同时重接多条边
+- 允许插入后出现“同一节点两个父亲”
+
+---
+
+### 8. debug 输出要求
+
+对每次 reinsert，请输出明确 debug 信息，至少包括：
+
+- moved node `u`
+- position type
+- target parent `p`
+- old_child（若是 internal）
+- rewiring 前的局部关系
+- rewiring 后的局部关系
+- structure validation 是否通过
+
+例如：
+
+- `REINSERT u=7 pos=EXTERNAL_LEFT parent=3`
+- `REINSERT u=7 pos=INTERNAL_RIGHT parent=5 old_child=9`
+- `REINSERT FAILED u=7 pos=INTERNAL_LEFT parent=2 reason=cycle_detected`
+
+---
+
+### 9. 本版 move 空间的正式定义
+
+本实现中，Move 的 reinsert 空间被**正式定义**为：
+
+- 所有 `EXTERNAL_LEFT(parent = p)`，其中 `p.left == null`
+- 所有 `EXTERNAL_RIGHT(parent = p)`，其中 `p.right == null`
+- 所有 `INTERNAL_LEFT(parent = p, old_child = p.left)`，其中 `p.left != null`
+- 所有 `INTERNAL_RIGHT(parent = p, old_child = p.right)`，其中 `p.right != null`
+
+除此之外，**不允许实现者额外发明其他 reinsert 位置**。
+
+这样 move 空间才是 decision-complete、确定的、可复现的。
 
 ## C. Move 候选位置枚举
 
@@ -273,8 +527,7 @@ Swap 只做以下事情：
 
 - 选两个不同节点 `a`, `b`
 - 交换它们承载的 `block_id`
-- 若 rotation 状态是跟随 block 的，也一并交换
-- 若 rotation 状态是节点状态，也请明确并保持语义一致
+- rotate 是 block 属性
 - **不要交换 parent/left/right**
 - **不要交换子树**
 
@@ -288,7 +541,7 @@ Rotate 逻辑保持最简单：
 
 - 选一个节点
 - 切换其朝向
-- 如果模块不可旋转，跳过或不把它纳入 rotate 候选
+- 所有模块都可旋转
 - 旋转后直接走全量 decode + 全量合法性检查 + 全量 cost
 
 ---
@@ -359,20 +612,28 @@ decode 完成后，必须对树中每条父子边逐条检查：
 必须检查任意两个 block 不重叠。  
 边界接触是允许的，面积交叠不允许。
 
-## 5. admissible / compactness 检查 `validate_admissible_floorplan`
+## 5. admissible / compactness 说明
 
-至少应检查：
-- 不存在还能继续向左移动的模块
-- 不存在还能继续向下移动的模块
+本项目中，**不把“模块已经完全不能继续向左移动 / 向下移动”作为 SA 的额外硬约束**。
 
-如果现有项目的 contour decode 理论上保证了某种紧致性，也仍建议实现一个显式检查函数；若实现成本太高，可至少检查：
-- 所有模块的放置都来自 contour 支撑
-- 没有明显悬空
-- 没有可见空隙违反 B\*-tree 邻接定义
+也就是说：
+- SA 不需要单独实现一个“还能不能继续左移 / 下移”的 admissible 检查器
+- SA 不需要额外证明某个 floorplan 达到了论文之外的全局 compactness
 
-如果完全严格的 admissible 检查难以优雅实现，请务必至少把“父子贴邻关系 + 无 overlap + decode 成功”检查做严。
+在当前仓库语境下，candidate 是否可接受，以以下条件为准：
+- `validate_tree_structure` 通过
+- `bstar_tree_to_floorplan(...)` 能成功 decode
+- decode 后满足父子几何关系约束
+- 无 overlap
+- floorplan 边界合法、cost 可正常计算
 
-以上已经在 bstar_tree2fp 中实现
+若满足上述条件，就视为当前项目接受的合法 B\*-tree placement。
+
+因此：
+- 不再额外要求“所有模块都不能继续左移 / 下移”
+- 不单独增加一个与当前 decoder 语义脱节的 admissible 失败分支
+
+以上所需的 decode / 几何 / overlap / 边界检查，已经在 `bstar_tree2fp` 中实现
 
 ---
 
@@ -419,7 +680,6 @@ decode 完成后，必须对树中每条父子边逐条检查：
   - decode_failed
   - geometric_constraint_failed
   - overlap_failed
-  - admissible_failed
 - 明确失败原因字符串
 - 若可能，附一份简短树结构摘要
 
@@ -453,29 +713,191 @@ decode 完成后，必须对树中每条父子边逐条检查：
 5. 若 cand 优于 best，则更新 best
 6. 温度逐步下降直到终止
 
+## SA 终止条件（decision-complete）
+
+请将 SA 的终止条件定义为：**以下任一条件满足，即立即停止 SA**。
+
+### 终止条件
+
+1. **达到时间上限**
+   - 若设置了 `time_limit_seconds > 0`
+   - 且从 SA 开始到当前的累计运行时间 `elapsed_seconds >= time_limit_seconds`
+   - 则立即停止
+
+2. **温度低于最小阈值**
+   - 若当前温度 `T < min_temperature`
+   - 则立即停止
+
+3. **达到最大外层温度轮数**
+   - 若已完成的外层温度轮数 `outer_loop_count >= max_outer_loops`
+   - 则立即停止
+
+4. **best cost 长时间停滞不变**
+   - 设最近一次 outer loop 结束后的最优代价为 `best_cost_current`
+   - 设进入该 outer loop 之前的最优代价为 `best_cost_prev`
+   - 若：
+     - `abs(best_cost_prev - best_cost_current) <= stagnation_epsilon`
+   - 则认为这一轮 outer loop 没有实质改善
+
+   维护一个连续停滞计数器 `stagnation_count`：
+   - 若本轮满足停滞条件，则 `stagnation_count += 1`
+   - 否则 `stagnation_count = 0`
+
+   当：
+   - `stagnation_count >= stagnation_outer_loops`
+   时，立即停止 SA
+
 ---
 
-# SA 参数
+## 参数定义
 
-请把 SA 参数做成可配置，尽量复用项目现有参数风格，例如命令行参数或 config。
+请统一使用以下参数名，不要混用别名：
 
-至少支持：
-
+- `time_limit_seconds`
 - `initial_temperature`
 - `cooling_rate`
 - `min_temperature`
+- `max_outer_loops`
 - `moves_per_temperature`
-- `max_steps` 或 `max_outer_loops`
 - `rotate_prob`
 - `move_prob`
 - `swap_prob`
 - `random_seed`
+- `stagnation_epsilon`
+- `stagnation_outer_loops`
 - `debug_sa`
 
-若仓库已有参数系统，就接入现有系统。  
-若没有，就加最小必要参数。
+在当前工程实现中，这些参数的落点统一如下：
 
-默认建议可先给一组保守参数，但不要写死在逻辑里。
+- CLI 仅保留：
+  - `INPUT`
+  - `T`
+  - `--mode <init|sa>`
+  - `--debug`
+- 其中：
+  - `time_limit_seconds` 由位置参数 `T` 提供
+  - `debug_sa` 由 `--debug` 控制
+- 其余 SA 参数不走 CLI，也不走额外 config 文件，而是固定写在 `src/sa.cc` 顶部的文件作用域常量中
+- 这些固定常量必须集中声明，不要散落在多个函数内部
+- 每个常量后面都必须带行尾注释，解释该参数控制的行为
+
+其中：
+
+### `stagnation_epsilon`
+用于定义“best cost 基本不变”的阈值。  
+只有当相邻两轮 outer loop 的 `best cost` 改变量满足：
+
+- `abs(best_cost_prev - best_cost_current) <= stagnation_epsilon`
+
+才认为这一轮属于“停滞”。
+
+默认建议：
+- 若 cost 是浮点数，可设为 `1e-9`、`1e-8` 或与当前 cost 尺度相适配的小阈值
+- 不要直接用 `==` 判断浮点 cost 不变
+
+### `stagnation_outer_loops`
+表示允许连续多少个 outer loop 处于“停滞”状态。  
+当连续停滞轮数达到该值时，终止 SA。
+
+默认建议：
+- 例如 `10`、`20`、`30`
+- 具体值作为 `src/sa.cc` 顶部常量集中维护，不要散落在逻辑里
+
+---
+
+## 外层循环结束时的停滞判定逻辑
+
+请在每个 outer loop（即一个固定温度层）结束时执行一次：
+
+1. 记录该轮结束时的 `best_cost_current`
+2. 与该轮开始前保存的 `best_cost_prev` 比较
+3. 若改变量 `<= stagnation_epsilon`，则记为“本轮停滞”
+4. 更新 `stagnation_count`
+5. 若 `stagnation_count >= stagnation_outer_loops`，则停止 SA
+6. 否则进入降温后的下一轮
+
+注意：
+- 停滞判定基于 **best cost**
+- 不是基于 current cost
+- 也不是基于 acceptance ratio
+
+---
+
+## debug 输出要求
+
+在 `debug_sa = true` 时，每个 outer loop 结束后至少输出：
+
+- `outer_loop_count`
+- 当前温度 `T`
+- 本轮开始前的 `best_cost_prev`
+- 本轮结束后的 `best_cost_current`
+- 改变量 `abs(best_cost_prev - best_cost_current)`
+- 当前 `stagnation_count`
+- 是否触发终止条件
+- 若触发，输出具体原因：
+  - `stop_reason = time_limit`
+  - `stop_reason = min_temperature`
+  - `stop_reason = max_outer_loops`
+  - `stop_reason = stagnation`
+
+---
+
+## 实现要求
+
+请把 SA 终止逻辑实现成一个明确函数，例如：
+
+- `should_stop_sa(state, time_limit_seconds, elapsed_seconds)`
+
+它必须返回：
+- `bool should_stop`
+- `string stop_reason`
+
+并且按如下优先方式实现：
+- 依次检查各终止条件
+- 只要任一条件满足，就返回 true
+- `stop_reason` 必须是稳定、可 debug 的固定字符串
+
+不要把终止逻辑散落在多个位置，也不要让不同调用点各自决定停机条件。
+
+---
+
+# SA 参数
+
+这里使用的参数名必须与前文“参数定义”一节完全一致，不要再引入别名。  
+但当前工程中不把这些参数做成一长串 CLI 选项，而是按以下方式实现：
+
+- CLI 仅支持：
+  - `INPUT`
+  - `T`
+  - `--mode <init|sa>`
+  - `--debug`
+- `time_limit_seconds` 来自位置参数 `T`
+- `debug_sa` 由 `--debug` 控制
+- 其余 SA 参数固定写在 `src/sa.cc` 顶部常量中
+- 不要额外引入命令行参数、环境变量或 config 文件来覆盖这些固定 SA 参数
+
+固定参数至少包括：
+
+- `time_limit_seconds`
+- `initial_temperature`
+- `cooling_rate`
+- `min_temperature`
+- `max_outer_loops`
+- `moves_per_temperature`
+- `rotate_prob`
+- `move_prob`
+- `swap_prob`
+- `random_seed`
+- `stagnation_epsilon`
+- `stagnation_outer_loops`
+- `debug_sa`
+
+其中：
+
+- `time_limit_seconds` 和 `debug_sa` 属于运行期入口参数
+- 其余项属于 `src/sa.cc` 顶部固定常量
+
+默认建议可先给一组保守参数，但要集中写在 `src/sa.cc` 顶部，并给每个参数加注释解释。
 
 ---
 
@@ -488,7 +910,7 @@ decode 完成后，必须对树中每条父子边逐条检查：
 - Swap: 0.3
 
 Move 是最重要的扰动，比例可以更高。  
-但请把概率参数化。
+但请把概率集中写成 `src/sa.cc` 顶部常量，不要散落在采样逻辑里。
 
 ---
 
@@ -542,6 +964,8 @@ SA 结束后：
 4. **最终结果文件的格式必须与 init fp 的输出格式完全一致**
 5. 如果当前项目已经有“写 init floorplan 结果”的函数，请直接复用这套函数来写 best SA floorplan
 6. 不要新增一个与 init fp 不兼容的新格式
+7. `solution` 文件只能通过现有 writer 输出；`best cost` / `best tree` / SA 统计信息 / invalid summary 只能输出到控制台或单独日志文件，不能混进 `solution` 文件
+8. 若项目同时输出 B\*-tree dump 文件，则该文件必须与当前 mode 的最终 `solution` 对应；在 `sa` 模式下它对应最终 best solution，而不是 init 解
 
 此外建议：
 - 同时输出一份 SA 统计信息，例如总步数、accepted/rejected/invalid 数量
@@ -559,12 +983,17 @@ SA 结束后：
 - 新增 SA 入口时，允许：
   - 先跑 greedy/init 通过 `build_initial_bstar_result(...)` 拿到初始树状态
   - 再进入 SA
-- 也可以做成开关：
+- CLI 入口仅保留：
+  - `INPUT`
+  - `T`
   - `--mode init`
   - `--mode sa`
-  - 或 `--sa` 之类
+  - `--debug`
 - 但不要破坏现有 init 的可用性
 - 禁止任何 `floorplan -> B*-tree` 路径
+- 除 `T` 和 `--debug` 外，其余 SA 参数固定写在 `src/sa.cc` 顶部常量里，并且每个常量都要带注释解释
+
+保持公开 BStarTree 不变，新增一个 SA 内部专用 EditableBStar，用稳定整数索引保存 block_id/left/right/parent/root。候选操作都在这个内部树上做，评估前再导出成 BStarTree 调现有 decoder。这样能避开 raw pointer 在 delete/reinsert 时的失效问题。
 
 ---
 
@@ -593,7 +1022,7 @@ SA 结束后：
 5. 非法候选日志
 6. debug 输出
 7. 与 init fp 一致格式的最终 best floorplan 输出
-8. 若需要，补充最小必要的命令行参数
+8. 仅保留最小必要命令行参数：`INPUT`、`T`、`--mode <init|sa>`、`--debug`
 
 ---
 
