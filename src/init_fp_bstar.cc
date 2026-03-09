@@ -54,7 +54,7 @@ bool approx_eq(double a, double b) { return std::abs(a - b) <= kEps; }
 
 void debug_log(const std::string &line) { g_debug_lines.push_back(line); }
 
-std::string derive_tree_dump_filename() {
+std::string derive_tree_dump_filename_impl() {
   const char *stem_env = std::getenv(kInputStemEnv);
   if (stem_env == nullptr) {
     return kTreeDumpFallback;
@@ -412,8 +412,8 @@ void dump_tree_dfs(const BStarNode *node, const std::unordered_map<int, Floorpla
   dump_tree_dfs(node->right, item_of, os);
 }
 
-void dump_bstar_tree_text(const BStarTree &tree, const FloorplanResult &fp,
-                          const std::vector<int> &rotate, const std::string &filename) {
+void dump_bstar_tree_text_impl(const BStarTree &tree, const FloorplanResult &fp,
+                               const std::vector<int> &rotate, const std::string &filename) {
   if (tree.root == nullptr) {
     throw std::runtime_error("init_fp_bstar: cannot dump empty B*-tree");
   }
@@ -638,10 +638,6 @@ InitBStarResult build_initial_bstar_result(const Problem &P,
   const double final_width = compute_layout_width(final_fp);
   eval_floorplan_cost(final_fp, num_nets_for_cost);
 
-  const std::string tree_dump_filename = derive_tree_dump_filename();
-  dump_bstar_tree_text(current_best.tree, final_fp, current_best.rotate, tree_dump_filename);
-  debug_log(std::string("[INIT_FP_BSTAR] tree_dump=") + tree_dump_filename);
-
   std::ostringstream done_ss;
   done_ss << "[INIT_FP_BSTAR] done nodes=" << current_best.tree.nodes.size()
           << " H=" << final_fp.H << " hpwl=" << final_fp.hpwl << " cost=" << final_fp.cost
@@ -658,6 +654,13 @@ InitBStarResult build_initial_bstar_result(const Problem &P,
 
 FloorplanResult build_initial_floorplan(const Problem &P, const std::vector<int> &perm) {
   return build_initial_bstar_result(P, perm).fp;
+}
+
+std::string derive_tree_dump_filename() { return derive_tree_dump_filename_impl(); }
+
+void dump_bstar_tree_text(const BStarTree &tree, const FloorplanResult &fp,
+                          const std::vector<int> &rotate, const std::string &filename) {
+  dump_bstar_tree_text_impl(tree, fp, rotate, filename);
 }
 
 void dump_init_planer_debug(std::ostream &os) {
